@@ -1,6 +1,7 @@
 from openai import OpenAI
 from dotenv import load_dotenv
 import os, time, pprint
+from utils import get_stock_price
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -49,8 +50,34 @@ def run_message_thread(thread_id, agent_id):
         if run.status == "incomplete" or run.status == "expired" or run.status == "cancelled":
             print("Run failed.")
             return None
-        run = get_run(run.thread_id, run.id)
-        time.sleep(3)
+        # check if this was a function call
+        elif run.status == 'requires_action':
+            print("Function Calling")
+            required_actions = run.required_action.submit_tool_outputs.model_dump()
+            print(required_actions)
+            tool_outputs = []
+            import json
+            for action in required_actions["tool_calls"]:
+                func_name = action['function']['name']
+                arguments = json.loads(action['function']['arguments'])
+                
+                if func_name == "get_stock_price":
+                    output = get_stock_price(symbol=arguments['symbol'])
+                    tool_outputs.append({
+                        "tool_call_id": action['id'],
+                        "output": output
+                    })
+                else:
+                    raise ValueError(f"Unknown function: {func_name}")
+                
+            print("Submitting outputs back to the Assistant...")
+            client.beta.threads.runs.submit_tool_outputs(
+                thread_id=thread_id,
+                run_id=run.id,
+                tool_outputs=tool_outputs
+            )
+            run = get_run(run.thread_id, run.id)
+            time.sleep(3)
     message = list_messages_in_thread(run.thread_id)[0].content[0].text.value
     return message
 
